@@ -91,7 +91,7 @@ stdenv.mkDerivation rec {
     [Desktop Entry]
     Type=Application
     Name=Autodesk Identity Manager Scheme Handler
-    Exec=sh -c 'env WINEPREFIX="\$HOME/.autodesk_fusion/wineprefixes/default" ${wineWowPackages.stable}/bin/wine "\$(find \$HOME/.autodesk_fusion/wineprefixes/default/ -name "AdskIdentityManager.exe" | head -1)" "%u"'
+    Exec=sh -c 'env WINEPREFIX="\$HOME/.autodesk_fusion/wineprefixes/default" ${wineWowPackages.stable}/bin/wine "\$(find \$HOME/.autodesk_fusion/wineprefixes/default/ -name "AdskIdentityManager.exe" | head -n1)" "%u"'
     StartupNotify=false
     MimeType=x-scheme-handler/adskidmgr;
     NoDisplay=true
@@ -123,7 +123,7 @@ stdenv.mkDerivation rec {
 
       Note: You need a valid Autodesk Fusion 360 license to use this software.
     '';
-    homepage = "https://github.com/cryinkfly/Autodesk-Fusion-360-for-Linux";
+    homepage = "https://codeberg.org/cryinkfly/Autodesk-Fusion-360-on-Linux";
     license = licenses.mit;
     platforms = [ "x86_64-linux" ];
     maintainers = [ ];
