@@ -4,7 +4,7 @@ A NixOS flake for running Autodesk Fusion 360 on Linux using Wine, with a stream
 
 ## Overview
 
-This project provides a Nix-based wrapper around the excellent [Autodesk Fusion 360 for Linux](https://github.com/cryinkfly/Autodesk-Fusion-360-for-Linux) installer by [cryinkfly](https://cryinkfly.com/sponsors/). It packages the installation and runtime components into a NixOS flake for easier integration into NixOS systems and declarative workflows.
+This project provides a Nix-based wrapper around the excellent [Autodesk Fusion 360 on Linux](https://codeberg.org/cryinkfly/Autodesk-Fusion-360-on-Linux) installer by [cryinkfly](https://cryinkfly.com).
 
 ### Key Features
 
@@ -103,7 +103,7 @@ After running the login command, Fusion 360 should authenticate and launch succe
 
 ## How It Works
 
-1. **Flake Configuration**: Downloads the original installer from cryinkfly's repository
+1. **Flake Configuration**: Downloads the original installer from cryinkfly's Codeberg repository
 2. **Headless Wrapper**: Automates the installation process without GUI interaction
 3. **Runtime Environment**: Configures Wine prefix and launches Fusion 360
 4. **CLI Interface**: Provides a unified command for all operations
@@ -177,7 +177,7 @@ This wrapper applies several patches to the original cryinkfly installer to enab
 
 5. **Disabled Browser Opening**: Commented out `xdg-open` calls for sponsorship links to prevent browser windows during headless installation.
 
-6. **MIME Handler Management**: Disabled the installer's MIME handler setup since the flake creates its own `adskidmgr-opener.desktop` file in the Nix store (the installer can't write to read-only locations).
+6. **MIME Handler Management**: Disabled the installer's MIME handler setup since the flake creates its own `adskidmgr-opener.desktop` file in the Nix store (the installer can't write to read-only paths).
 
 ### Graphics Optimization
 
@@ -200,7 +200,7 @@ These settings are written to `NMachineSpecificOptions.xml` automatically after 
 
 ## Credits
 
-This project is a NixOS wrapper around the original [Autodesk Fusion 360 for Linux](https://github.com/cryinkfly/Autodesk-Fusion-360-for-Linux) installer created by **[cryinkfly](https://cryinkfly.com/sponsors/)**.
+This project is a NixOS wrapper around the original [Autodesk Fusion 360 on Linux](https://codeberg.org/cryinkfly/Autodesk-Fusion-360-on-Linux) installer created by **[cryinkfly](https://cryinkfly.com)**.
 
 All credit for the core installation logic and Wine configuration goes to cryinkfly. This flake simply packages it for NixOS users and adds a streamlined CLI interface.
 
@@ -210,6 +210,6 @@ Please consider [supporting cryinkfly](https://cryinkfly.com/sponsors/) for thei
 
 This wrapper is licensed under the MIT License.
 
-The original [Autodesk Fusion 360 for Linux](https://github.com/cryinkfly/Autodesk-Fusion-360-for-Linux) installer by cryinkfly has its own license terms.
+The original [Autodesk Fusion 360 on Linux](https://codeberg.org/cryinkfly/Autodesk-Fusion-360-on-Linux) installer by cryinkfly has its own license terms.
 
 Autodesk Fusion 360 itself is proprietary software owned by Autodesk, Inc. You must have a valid license to use it.
