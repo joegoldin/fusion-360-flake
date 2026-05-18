@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     fusion360-installer-src = {
-      url = "github:cryinkfly/Autodesk-Fusion-360-for-Linux";
+      url = "git+https://codeberg.org/cryinkfly/Autodesk-Fusion-360-on-Linux.git";
       flake = false;
     };
   };
