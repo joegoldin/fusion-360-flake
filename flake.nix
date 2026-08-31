@@ -44,7 +44,25 @@
 
           # mkWindowsApp-based package: the Wine prefix is described
           # declaratively and materialized into a cached layer on first launch.
-          fusion360 = pkgs.callPackage ./fusion360.nix {
+          # Build-time install: the wine prefix and Fusion itself are built
+          # by nix and ship in the closure. See packages/prefix.nix.
+          fusion360 = pkgs.callPackage ./packages/fusion360.nix {
+            installerSrc = fusion360-installer-src;
+            wine = pkgs.wineWow64Packages.stable;
+            prefix = self.packages.${system}.fusion360-prefix;
+          };
+
+          fusion360-prefix = pkgs.callPackage ./packages/prefix.nix {
+            installerSrc = fusion360-installer-src;
+            wine = pkgs.wineWow64Packages.stable;
+            sources = self.packages.${system}.fusion360-sources;
+          };
+
+          fusion360-sources = pkgs.callPackage ./packages/sources.nix { };
+
+          # Lazy mkWindowsApp variant: prefix materialized on first launch
+          # instead of at build time. Kept for comparison.
+          fusion360-lazy = pkgs.callPackage ./fusion360.nix {
             inherit (erosanix.lib.${system}) mkWindowsApp;
             installerSrc = fusion360-installer-src;
             wine = pkgs.wineWow64Packages.stable;
