@@ -176,6 +176,12 @@ let
             [HKEY_CURRENT_USER\Software\Wine\X11 Driver]
             "Managed"="Y"
             "Decorated"="Y"
+            ; Wine asks the window manager for input focus through
+            ; WM_TAKE_FOCUS. kwin under XWayland answers that differently for
+            ; Fusion's modal dialogs, so Preferences and friends map and draw
+            ; but never receive clicks — movable and closable, dead inside.
+            ; Taking focus directly instead makes them behave.
+            "UseTakeFocus"="N"
           ''}
           wineserver -w
 
@@ -235,6 +241,12 @@ let
           ${wine'} reg add 'HKLM\System\CurrentControlSet\Services\edgeupdatem' /v Start /t REG_DWORD /d 4 /f || true
           ${wine'} reg add 'HKCU\Software\Wine\AppDefaults\msedgewebview2.exe' /v Version /t REG_SZ /d win7 /f || true
           ${wine'} taskkill /f /im MicrosoftEdgeUpdate.exe || true
+
+        # Fusion's bundled Chromium trips int3 breakpoints that wine treats as
+        # unhandled, and each one spawns a winedbg window. The breakpoints
+        # happen regardless; this just stops them turning into a pile of
+        # dialogs on top of a working application.
+        ${wine'} reg add 'HKCU\Software\Wine\WineDbg' /v ShowCrashDialog /t REG_DWORD /d 0 /f || true
 
           # -k rather than -w: nothing here needs to outlive the stage, and killing
           # the server cannot deadlock the way waiting can.
@@ -304,6 +316,45 @@ runCommand "fusion360-prefix"
       echo "Fusion360.exe is missing: the client installer did not complete" >&2
       exit 1
     fi
+
+    # Fusion's embedded Chromium traps on a debug assertion under wine and its
+    # web panels — the project browser, the data panel, the in-app dialogs —
+    # come up blank. At this offset Qt6WebEngineCore.dll reads
+    #
+    #     74 01    jz +1     ; skip the trap when the check passes
+    #     cc       int3
+    #
+    # which is an assertion wine fails spuriously, so the renderer takes the
+    # breakpoint and dies. Turning the int3 into a nop lets it fall through.
+    #
+    # Upstream's issue #586 has people fixing this by downloading a
+    # pre-patched DLL from a stranger's Google Drive. This is the same edit
+    # applied to the file Autodesk shipped, with no third-party binary: one
+    # byte, and the build fails if it is not the byte we expect, so a Fusion
+    # bump can never silently corrupt a different DLL.
+    qtdll=$(find "$out" -name Qt6WebEngineCore.dll | head -n 1)
+    if [ -z "$qtdll" ]; then
+      echo "Qt6WebEngineCore.dll not found" >&2
+      exit 1
+    fi
+    int3_off=$((0x3d81a81))
+    cur=$(dd if="$qtdll" bs=1 skip="$int3_off" count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    if [ "$cur" != "cc" ]; then
+      echo "Qt6WebEngineCore.dll: expected 0xcc at offset $int3_off, found 0x$cur." >&2
+      echo "The Fusion build changed; re-derive the offset from the int3 crash address." >&2
+      exit 1
+    fi
+    printf '\x90' | dd of="$qtdll" bs=1 seek="$int3_off" conv=notrunc status=none
+    echo "Qt6WebEngineCore.dll: int3 at $int3_off replaced with nop"
+
+    # Autodesk's telemetry service crashes on startup: it asks WMI about the
+    # GPU, wbemprox routes that into DXVK's dxgi, and the call page-faults.
+    # Upstream means to disable it — its script sets a DllOverrides entry for
+    # adpclientservice.exe under a "Remove tracking metrics/calling home"
+    # comment — but overrides govern DLL loading and cannot stop an executable
+    # Fusion launches, so it runs anyway. Move it aside instead. It reports
+    # analytics and nothing else depends on it.
+    find "$out" -name "ADPClientService.exe" -exec mv {} {}.disabled \;
 
     # Graphics defaults. Fusion reads whichever of these three paths its build
     # happens to use, so all three get the file.

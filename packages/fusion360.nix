@@ -31,6 +31,8 @@
   copyDesktopItems,
   makeWrapper,
   writeShellApplication,
+  glibc,
+  gnused,
   rsync,
   vulkan-loader,
   util-linux,
@@ -48,6 +50,8 @@ let
 
     runtimeInputs = [
       wine
+      glibc.bin
+      gnused
       rsync
       util-linux
       coreutils
@@ -119,6 +123,44 @@ let
           mkdir -p "$(dirname "$opts")"
           install -m 644 "${machineOptions}" "$opts"
         fi
+      done
+
+      # Hide the navigation bar.
+      #
+      # It is drawn by AdCefWebBrowser as a CEF surface composited over the
+      # D3D viewport, and each repaint clobbers the presented frame: the
+      # viewport flashes black whenever the application goes idle, and stops
+      # the moment the bar is hidden. Upstream ships fix-navbar-flicker.sh for
+      # this and expects the user to run it by hand.
+      #
+      # Done on every launch rather than once, because the layout file only
+      # appears after an account has logged in and lives under a per-account
+      # profile directory — neither of which the prefix can know at build time.
+      # Only ever flips True to False, so re-showing the bar from the View menu
+      # survives until the next launch.
+      for opts in \
+        "$prefix/drive_c/users/$user/AppData/Roaming/Autodesk/Neutron Platform/Options" \
+        "$prefix/drive_c/users/$user/AppData/Local/Autodesk/Neutron Platform/Options" \
+        "$prefix/drive_c/users/$user/Application Data/Autodesk/Neutron Platform/Options"
+      do
+        [ -d "$opts" ] || continue
+        for profile in "$opts"/*/; do
+          layout="$profile/NULastDisplayedLayout.xml"
+          [ -f "$layout" ] || continue
+          # The file is UTF-16LE; work on a UTF-8 copy and convert back.
+          decoded=$(iconv -f UTF-16LE -t UTF-8 "$layout" 2>/dev/null) || continue
+          case "$decoded" in
+            *'Contents="NavToolbar"'*)
+              # [^>] keeps the substitution inside the NavToolbar tag; a greedy
+              # .* would run past it and rewrite an unrelated Visible= later in
+              # what is effectively one long line.
+              printf '%s' "$decoded" \
+                | sed 's/\(Contents="NavToolbar"[^>]*\)Visible="True"/\1Visible="False"/' \
+                | iconv -f UTF-8 -t UTF-16LE > "$layout".tmp \
+                && mv "$layout".tmp "$layout"
+              ;;
+          esac
+        done
       done
 
       export WINEPREFIX="$prefix"
