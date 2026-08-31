@@ -1,19 +1,56 @@
 {
   "nodes": {
-    "fusion360-installer-src": {
-      "flake": false,
+    "erosanix": {
+      "inputs": {
+        "flake-compat": "flake-compat",
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
       "locked": {
-        "lastModified": 1766155623,
-        "narHash": "sha256-tR7A4ICV9DiA6g5/3QvDyUyMQAf/jEJXuWl+/33rn8o=",
-        "owner": "cryinkfly",
-        "repo": "Autodesk-Fusion-360-for-Linux",
-        "rev": "8a163036e744bfd9d7a01708abcf27581c22cff3",
+        "lastModified": 1788097057,
+        "narHash": "sha256-YbmGVypTkAj1aVGfFXKO7sld8irFyTDDEL/BihPpXxo=",
+        "owner": "emmanuelrosa",
+        "repo": "erosanix",
+        "rev": "8a87a0a8ad29bb5dd1df1b3fe7f30279138822cb",
         "type": "github"
       },
       "original": {
-        "owner": "cryinkfly",
-        "repo": "Autodesk-Fusion-360-for-Linux",
+        "owner": "emmanuelrosa",
+        "repo": "erosanix",
         "type": "github"
+      }
+    },
+    "flake-compat": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1777728799,
+        "narHash": "sha256-z7jjYQqhkFKab92VQ3duB7QVO7f7Y62qTFrJYXO/lyo=",
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "rev": "4b2287113c2f9a2331c04899b2e2e5ab92dea9c5",
+        "type": "github"
+      },
+      "original": {
+        "owner": "edolstra",
+        "repo": "flake-compat",
+        "type": "github"
+      }
+    },
+    "fusion360-installer-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1781935856,
+        "narHash": "sha256-k3ECZzYHV5gJq4qDR9YcYMoUGK4YW94iVGp62K5KbSM=",
+        "ref": "refs/heads/main",
+        "rev": "53b02038548f01a6e0a1fa2def0a9b545f1561c1",
+        "revCount": 2709,
+        "type": "git",
+        "url": "https://codeberg.org/cryinkfly/Autodesk-Fusion-360-on-Linux.git"
+      },
+      "original": {
+        "type": "git",
+        "url": "https://codeberg.org/cryinkfly/Autodesk-Fusion-360-on-Linux.git"
       }
     },
     "nixpkgs": {
@@ -34,6 +71,7 @@
     },
     "root": {
       "inputs": {
+        "erosanix": "erosanix",
         "fusion360-installer-src": "fusion360-installer-src",
         "nixpkgs": "nixpkgs"
       }

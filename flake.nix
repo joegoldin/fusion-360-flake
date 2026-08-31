@@ -7,6 +7,11 @@
       url = "git+https://codeberg.org/cryinkfly/Autodesk-Fusion-360-on-Linux.git";
       flake = false;
     };
+    # Provides mkWindowsApp, which the `fusion360` package below builds on.
+    erosanix = {
+      url = "github:emmanuelrosa/erosanix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -14,6 +19,7 @@
       self,
       nixpkgs,
       fusion360-installer-src,
+      erosanix,
     }:
     let
       systems = [ "x86_64-linux" ];
@@ -34,8 +40,18 @@
           pkgs = pkgsFor system;
         in
         {
-          default = self.packages.${system}.fusion360-installer;
+          default = self.packages.${system}.fusion360;
 
+          # mkWindowsApp-based package: the Wine prefix is described
+          # declaratively and materialized into a cached layer on first launch.
+          fusion360 = pkgs.callPackage ./fusion360.nix {
+            inherit (erosanix.lib.${system}) mkWindowsApp;
+            installerSrc = fusion360-installer-src;
+            wine = pkgs.wineWow64Packages.stable;
+          };
+
+          # Original wrapper around upstream's shell installer. Kept so the
+          # imperative `fusion install` path stays available.
           fusion360-installer = pkgs.callPackage ./package.nix {
             installerSrc = fusion360-installer-src;
           };
@@ -43,7 +59,11 @@
       );
 
       apps = forAllSystems (system: {
-        default = self.apps.${system}.fusion;
+        default = self.apps.${system}.fusion360;
+        fusion360 = {
+          type = "app";
+          program = "${self.packages.${system}.fusion360}/bin/fusion360";
+        };
         fusion = {
           type = "app";
           program = "${self.packages.${system}.fusion360-installer}/bin/fusion";
@@ -70,7 +90,7 @@
               samba
               spacenavd
               wget
-              samba 
+              samba
               xdg-utils
               bc
               xorg.xrandr
