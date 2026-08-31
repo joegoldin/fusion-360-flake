@@ -202,9 +202,13 @@ let
           chmod u+w "$out"/drive_c/windows/syswow64/*.dll
         fi
 
-        for d in d3d8 d3d9 d3d10core d3d11 dxgi; do
-          ${wine'} reg add 'HKCU\Software\Wine\DllOverrides' /v "$d" /t REG_SZ /d native /f
-        done
+        # Upstream's own override file, applied verbatim rather than
+        # reconstructed from memory. The distinction that matters is d3d9: it
+        # stays *builtin* while d3d11/d3d10core/dxgi go to DXVK. Qt's qwindows
+        # plugin loads d3d9, and pointing that at DXVK makes it throw
+        # DxvkError during startup, killing the app with an unhandled C++
+        # exception before any window appears.
+        ${wine'} regedit /S ${installerSrc}/files/setup/resource/video_driver/DXVK/DXVK.reg
         wineserver -w
 
         # Guard against the mixed-architecture failure above ever coming back.

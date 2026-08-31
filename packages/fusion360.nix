@@ -32,6 +32,7 @@
   makeWrapper,
   writeShellApplication,
   rsync,
+  vulkan-loader,
   util-linux,
   coreutils,
   findutils,
@@ -124,6 +125,14 @@ let
       export WINEARCH=win64
       export WINEDEBUG=-all,+err
       export DXVK_LOG_LEVEL=none
+
+      # winevulkan dlopen()s libvulkan.so.1 rather than linking it, and NixOS
+      # ships no libvulkan on any default search path — /run/opengl-driver/lib
+      # carries the ICDs but not the loader, and every Vulkan program here
+      # finds its own through an RPATH. Without this DXVK fails at
+      # "Failed to create Vulkan 1.1 instance" and Fusion loses hardware
+      # rendering even though the host has a working Vulkan driver.
+      export LD_LIBRARY_PATH="${vulkan-loader}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
       export DXVK_STATE_CACHE_PATH="''${XDG_CACHE_HOME:-$HOME/.cache}/fusion360-dxvk"
       mkdir -p "$DXVK_STATE_CACHE_PATH"
 
