@@ -1,14 +1,26 @@
 # Launcher for the store-built Fusion prefix.
 #
-# The prefix lives in /nix/store and is read-only, but wine writes to its
-# prefix constantly and Fusion keeps user settings and documents there. So the
-# store prefix is the read-only lower layer of a union mount, and everything
-# written at runtime lands in a writable upper layer under $XDG_DATA_HOME.
+# The prefix is built by nix and lives in /nix/store, where everything is mode
+# 444/555 and owned by root. A wine prefix has to be writable — wine rewrites
+# system.reg and user.reg on every run, and Fusion rewrites plenty besides.
 #
-# fuse-overlayfs rather than kernel overlayfs: it needs no privileges beyond
-# the setuid fusermount helper, which is already present wherever FUSE is
-# enabled. unionfs-fuse was tried first and rejected — see the note about
-# store permissions in the launcher below, which it cannot work around either.
+# Overlaying a writable layer over the store copy does not work, and not for
+# want of the right options: opening a mode-444 lower file for writing is
+# refused at the permission check before any overlay implementation gets the
+# chance to copy it up, and renaming over one fails with EPERM. unionfs-fuse
+# and fuse-overlayfs behave identically here, including with squash_to_uid and
+# noacl. Pre-creating the directory tree in the upper layer buys new files in
+# existing directories, but nothing can be *modified*, so wine cannot save the
+# registry and Fusion never finishes starting.
+#
+# So the prefix is materialized once into a writable copy under $XDG_DATA_HOME.
+# It costs ~10GB of disk and a couple of minutes on first run, and in exchange
+# everything downstream is ordinary: no FUSE, no mount lifecycle, no permission
+# games, and Fusion's own in-place updates work the way it expects.
+#
+# The build-time install is still doing the real work: this copy is a file
+# copy, with nothing downloaded, no winetricks and no wine install.
+
 {
   lib,
   stdenv,
@@ -19,114 +31,119 @@
   copyDesktopItems,
   makeWrapper,
   writeShellApplication,
-  fuse-overlayfs,
+  rsync,
   util-linux,
   coreutils,
   findutils,
 }:
 let
+  # Fusion's bootstrap options: graphics driver (VirtualDeviceDx11), the Qt
+  # rendering API, and TrustAllServers. Upstream's installer copies this into
+  # the user profile, and Fusion hangs on the splash without it.
+  machineOptions = "${installerSrc}/files/setup/resource/video_driver/DXVK/NMachineSpecificOptions.xml";
+
   launcher = writeShellApplication {
     name = "fusion360";
 
     runtimeInputs = [
       wine
-      fuse-overlayfs
+      rsync
       util-linux
       coreutils
       findutils
     ];
 
     text = ''
-      prefix="${prefix}"
+      store_prefix="${prefix}"
       data="''${XDG_DATA_HOME:-$HOME/.local/share}/fusion360"
-      upper="$data/upper"
-      work="$data/work"
-      merged="''${XDG_RUNTIME_DIR:-/tmp}/fusion360-prefix"
-      stamp="$data/prefix-path"
+      prefix="$data/prefix"
+      stamp="$data/prefix-source"
 
-      mkdir -p "$upper" "$work" "$merged"
+      mkdir -p "$data"
 
-      # Everything in /nix/store is mode 555 and owned by root, and no overlay
-      # option can conjure a write bit that isn't there: creating a file inside
-      # a directory whose only copy is the read-only lower layer fails with
-      # EACCES, and wine writes to its prefix constantly.
-      #
-      # So the writable layer gets its own copy of the directory tree — the
-      # directories only, never the file data. Writes then land in a mode-755
-      # upper directory while every file is still read straight from the store.
-      # For this prefix that is ~10k directories, about 40MB and a few seconds,
-      # against ~10GB and minutes for copying the prefix itself.
-      #
-      # Re-run whenever the prefix changes, and only ever additive, so a
-      # package update never destroys the user data already in the upper layer.
-      if [ ! -f "$stamp" ] || [ "$(cat "$stamp")" != "$prefix" ]; then
-        echo "fusion360: preparing writable layer for $prefix" >&2
-        (cd "$prefix" && find . -type d -exec mkdir -p "$upper/{}" \;)
-        chmod -R u+rwX "$upper"
-        printf '%s' "$prefix" > "$stamp"
+      # An earlier version of this launcher mounted the store prefix as a
+      # read-only overlay lower layer with a writable upper layer. That could
+      # never work (see the note above), so drop the leftovers rather than
+      # leave orphaned state sitting in the user's data directory.
+      if [ -e "$data/prefix-path" ] || [ -d "$data/upper" ]; then
+        echo "fusion360: removing state from the old overlay layout" >&2
+        rm -rf "$data/upper" "$data/work" "$data/prefix-path"
       fi
 
-      if mountpoint -q "$merged" 2>/dev/null; then
-        echo "fusion360: $merged is already mounted; is Fusion already running?" >&2
-        exit 1
+      # Materialize (or re-materialize) the writable prefix. Keyed on the store
+      # path so a package bump is noticed; the copy goes to a scratch directory
+      # and is swapped into place at the end, so an interrupted copy can never
+      # leave a half-populated prefix behind that looks complete.
+      if [ ! -f "$stamp" ] || [ "$(cat "$stamp")" != "$store_prefix" ]; then
+        echo "fusion360: preparing the wine prefix, this takes a couple of minutes" >&2
+        rm -rf "$prefix.new"
+        mkdir -p "$prefix.new"
+        # --chmod gives the copy real write bits; the store originals are 444.
+        rsync -a --chmod=u+rwX,go-w "$store_prefix/" "$prefix.new/"
+
+        if [ -d "$prefix" ]; then
+          # Carry the user profile across so a package bump does not throw away
+          # local settings, then drop the old tree.
+          for u in "$prefix"/drive_c/users/*/; do
+            [ -d "$u" ] || continue
+            name="$(basename "$u")"
+            [ "$name" = "Public" ] && continue
+            rsync -a --chmod=u+rwX "$u" "$prefix.new/drive_c/users/$name/" 2>/dev/null || true
+          done
+          rm -rf "$prefix.old"
+          mv "$prefix" "$prefix.old"
+        fi
+        mv "$prefix.new" "$prefix"
+        rm -rf "$prefix.old"
+        printf '%s' "$store_prefix" > "$stamp"
+        echo "fusion360: prefix ready" >&2
       fi
 
-      # fusermount is setuid and must come from the system wrapper directory,
-      # NOT from a nixpkgs fuse package: pulling `fuse` into runtimeInputs
-      # shadows /run/wrappers/bin/fusermount with an unprivileged copy from the
-      # store, and every unmount then fails silently while the mount survives
-      # to block the next launch. fuse-overlayfs speaks fuse3, so prefer
-      # fusermount3 and keep fusermount as the fallback.
-      unmount_merged() {
-        fusermount3 -u "$merged" 2>/dev/null || fusermount -u "$merged" 2>/dev/null
-      }
+      # Fusion reads its bootstrap options — graphics driver, Qt rendering API,
+      # TLS behaviour — from the *running* user's profile. The prefix is built
+      # by the nix build user, so the copy written at build time lands under a
+      # profile Fusion never reads, and without these options it falls back to
+      # probing for a graphics driver and hangs on the splash at "Initializing".
+      #
+      # Seed them here, where the user is known. Only fills in what is missing,
+      # so preferences changed inside Fusion are left alone.
+      user="$(id -un)"
+      for d in \
+        "AppData/Roaming/Autodesk/Neutron Platform/Options" \
+        "AppData/Local/Autodesk/Neutron Platform/Options" \
+        "Application Data/Autodesk/Neutron Platform/Options"
+      do
+        opts="$prefix/drive_c/users/$user/$d/NMachineSpecificOptions.xml"
+        if [ ! -f "$opts" ]; then
+          mkdir -p "$(dirname "$opts")"
+          install -m 644 "${machineOptions}" "$opts"
+        fi
+      done
 
-      cleanup() {
-        # wine has to be gone before the overlay can be unmounted, or the
-        # mount stays busy and the next launch aborts on the check above.
-        #
-        # `wineserver -k` starts a server if none is running, just to kill it,
-        # and that server holds the mount for a moment after the command
-        # returns — so unmounting immediately fails with EBUSY. Retry for a few
-        # seconds, then fall back to a lazy unmount so a wedged server can
-        # never strand the mount.
-        WINEPREFIX="$merged" wineserver -k 2>/dev/null || true
-        for _ in $(seq 20); do
-          if unmount_merged; then
-            return
-          fi
-          sleep 0.5
-        done
-        # Lazy detach, so a wedged wine process can never strand the mount and
-        # block the next launch.
-        fusermount3 -uz "$merged" 2>/dev/null || fusermount -uz "$merged" 2>/dev/null || true
-      }
-
-      fuse-overlayfs -o "lowerdir=$prefix,upperdir=$upper,workdir=$work" "$merged"
-      trap cleanup EXIT INT TERM
-
-      export WINEPREFIX="$merged"
+      export WINEPREFIX="$prefix"
       export WINEARCH=win64
       export WINEDEBUG=-all,+err
       export DXVK_LOG_LEVEL=none
+      export DXVK_STATE_CACHE_PATH="''${XDG_CACHE_HOME:-$HOME/.cache}/fusion360-dxvk"
+      mkdir -p "$DXVK_STATE_CACHE_PATH"
 
       # Autodesk's browser sign-in hands back an adskidmgr: URL; when invoked
       # as the scheme handler, route it to the identity manager rather than
       # starting a second Fusion.
       case "''${1:-}" in
         adskidmgr:*)
-          target="$(find "$merged" -name AdskIdentityManager.exe | head -n 1)"
+          target="$(find "$prefix" -name AdskIdentityManager.exe | head -n 1)"
           ;;
         *)
           # Newest build wins: Fusion leaves older ones in place when it
-          # updates itself into the upper layer.
-          target="$(find "$merged" -name Fusion360.exe -printf '%T+ %p\n' \
+          # updates itself.
+          target="$(find "$prefix" -name Fusion360.exe -printf '%T+ %p\n' \
             | sort -r | head -n 1 | cut -d' ' -f2-)"
           ;;
       esac
 
       if [ -z "$target" ]; then
-        echo "fusion360: no executable found in the prefix" >&2
+        echo "fusion360: no executable found in $prefix" >&2
         exit 1
       fi
 

@@ -21,6 +21,8 @@
   winetricks,
   fetchFromGitHub,
   glibcLocales,
+  dxvk,
+  file,
   sources,
   installerSrc,
 }:
@@ -154,48 +156,85 @@ let
         nativeBuildInputs = [
           wine
           xvfb-run
+          file
         ];
       }
       ''
-        ${wineEnv}
-        ${copyPrev stage2}
+          ${wineEnv}
+          ${copyPrev stage2}
 
-        ${wine'} regedit /S ${writeText "fusion-overrides.reg" ''
-          Windows Registry Editor Version 5.00
+          ${wine'} regedit /S ${writeText "fusion-overrides.reg" ''
+            Windows Registry Editor Version 5.00
 
-          [HKEY_CURRENT_USER\Software\Wine\DllOverrides]
-          "adpclientservice.exe"="native"
-          "AdCefWebBrowser.exe"="builtin"
-          "msvcp140"="native"
-          "mfc140u"="native"
-          "bcp47langs"=""
+            [HKEY_CURRENT_USER\Software\Wine\DllOverrides]
+            "adpclientservice.exe"="native"
+            "AdCefWebBrowser.exe"="builtin"
+            "msvcp140"="native"
+            "mfc140u"="native"
+            "bcp47langs"=""
 
-          [HKEY_CURRENT_USER\Software\Wine\X11 Driver]
-          "Managed"="Y"
-          "Decorated"="Y"
-        ''}
+            [HKEY_CURRENT_USER\Software\Wine\X11 Driver]
+            "Managed"="Y"
+            "Decorated"="Y"
+          ''}
+          wineserver -w
+
+          # DXVK. The options file installed in stage 4 selects VirtualDeviceDx11,
+        # so the DX11 path has to actually exist — wine's builtin d3d11 is not
+        # what upstream targets, and Fusion hangs probing for a driver without a
+        # working one. Upstream gets these through `winetricks -q dxvk`, which
+        # downloads a release from GitHub; take them from nixpkgs instead so the
+        # build stays offline and the version is pinned by the flake.
+        # DXVK, placed by hand rather than through setup_dxvk.sh.
+        #
+        # The script does not understand this prefix's wow64 layout: it copies
+        # both builds into system32 in an order that leaves some 64-bit DLLs
+        # overwritten by their 32-bit counterparts. The result loads far enough
+        # to look installed and then fails at runtime with c000007b
+        # (STATUS_INVALID_IMAGE_FORMAT) when Qt6Gui pulls in dxgi.
+        #
+        # nixpkgs exposes the two cross-builds separately, so put each where it
+        # belongs and let the override list below do the rest.
+        cp -f ${dxvk.dxvk64}/bin/*.dll "$out/drive_c/windows/system32/"
+        chmod u+w "$out"/drive_c/windows/system32/*.dll
+        if [ -d "$out/drive_c/windows/syswow64" ]; then
+          cp -f ${dxvk.dxvk32}/bin/*.dll "$out/drive_c/windows/syswow64/"
+          chmod u+w "$out"/drive_c/windows/syswow64/*.dll
+        fi
+
+        for d in d3d8 d3d9 d3d10core d3d11 dxgi; do
+          ${wine'} reg add 'HKCU\Software\Wine\DllOverrides' /v "$d" /t REG_SZ /d native /f
+        done
         wineserver -w
 
+        # Guard against the mixed-architecture failure above ever coming back.
+        for f in d3d11 dxgi d3d9 d3d10core d3d8; do
+          if ! file -b "$out/drive_c/windows/system32/$f.dll" | grep -q x86-64; then
+            echo "system32/$f.dll is not 64-bit; DXVK install is inconsistent" >&2
+            exit 1
+          fi
+        done
+
         # WebView2 backs Fusion's sign-in view. It insists on a display, and
-        # WebView2 109 refuses to install unless the prefix reports win7.
-        cp ${sources.webview2} "$TMPDIR/webview2.exe"
-        chmod +w "$TMPDIR/webview2.exe"
-        ${wine'} winecfg -v win7
-        xvfb-run -a timeout -k 2m 10m ${wine'} "$TMPDIR/webview2.exe" /silent /install || true
-        ${wine'} winecfg -v win11
+          # WebView2 109 refuses to install unless the prefix reports win7.
+          cp ${sources.webview2} "$TMPDIR/webview2.exe"
+          chmod +w "$TMPDIR/webview2.exe"
+          ${wine'} winecfg -v win7
+          xvfb-run -a timeout -k 2m 10m ${wine'} "$TMPDIR/webview2.exe" /silent /install || true
+          ${wine'} winecfg -v win11
 
-        # The Edge updater installs itself as a resident service. It has to be
-        # disabled AND killed before waiting on wineserver: `wineserver -w` waits
-        # for every process in the prefix to exit, and the updater never does, so
-        # waiting first deadlocks the build.
-        ${wine'} reg add 'HKLM\System\CurrentControlSet\Services\edgeupdate' /v Start /t REG_DWORD /d 4 /f || true
-        ${wine'} reg add 'HKLM\System\CurrentControlSet\Services\edgeupdatem' /v Start /t REG_DWORD /d 4 /f || true
-        ${wine'} reg add 'HKCU\Software\Wine\AppDefaults\msedgewebview2.exe' /v Version /t REG_SZ /d win7 /f || true
-        ${wine'} taskkill /f /im MicrosoftEdgeUpdate.exe || true
+          # The Edge updater installs itself as a resident service. It has to be
+          # disabled AND killed before waiting on wineserver: `wineserver -w` waits
+          # for every process in the prefix to exit, and the updater never does, so
+          # waiting first deadlocks the build.
+          ${wine'} reg add 'HKLM\System\CurrentControlSet\Services\edgeupdate' /v Start /t REG_DWORD /d 4 /f || true
+          ${wine'} reg add 'HKLM\System\CurrentControlSet\Services\edgeupdatem' /v Start /t REG_DWORD /d 4 /f || true
+          ${wine'} reg add 'HKCU\Software\Wine\AppDefaults\msedgewebview2.exe' /v Version /t REG_SZ /d win7 /f || true
+          ${wine'} taskkill /f /im MicrosoftEdgeUpdate.exe || true
 
-        # -k rather than -w: nothing here needs to outlive the stage, and killing
-        # the server cannot deadlock the way waiting can.
-        wineserver -k || true
+          # -k rather than -w: nothing here needs to outlive the stage, and killing
+          # the server cannot deadlock the way waiting can.
+          wineserver -k || true
       '';
 in
 # Stage 4: Fusion itself.
