@@ -132,6 +132,14 @@ let
       # finds its own through an RPATH. Without this DXVK fails at
       # "Failed to create Vulkan 1.1 instance" and Fusion loses hardware
       # rendering even though the host has a working Vulkan driver.
+      # Fusion embeds Chromium through QtWebEngine for its in-app panels (the
+      # "what's new" dialogs, the app store, parts of the help). Chromium's
+      # sandbox relies on Linux namespaces and seccomp reached through syscalls
+      # wine does not provide, so QtWebEngineProcess.exe dies immediately and
+      # those panels render blank. The sandbox is not buying anything here
+      # anyway: everything already runs inside the user's own wine prefix.
+      export QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox ''${QTWEBENGINE_CHROMIUM_FLAGS:-}"
+
       export LD_LIBRARY_PATH="${vulkan-loader}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
       export DXVK_STATE_CACHE_PATH="''${XDG_CACHE_HOME:-$HOME/.cache}/fusion360-dxvk"
       mkdir -p "$DXVK_STATE_CACHE_PATH"
