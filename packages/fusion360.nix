@@ -5,9 +5,10 @@
 # store prefix is the read-only lower layer of a union mount, and everything
 # written at runtime lands in a writable upper layer under $XDG_DATA_HOME.
 #
-# unionfs-fuse rather than kernel overlayfs: it needs no privileges beyond the
-# setuid fusermount helper that is already present wherever FUSE is enabled,
-# and it is the same mechanism mkWindowsApp used, so it is known to work here.
+# fuse-overlayfs rather than kernel overlayfs: it needs no privileges beyond
+# the setuid fusermount helper, which is already present wherever FUSE is
+# enabled. unionfs-fuse was tried first and rejected — see the note about
+# store permissions in the launcher below, which it cannot work around either.
 {
   lib,
   stdenv,
@@ -18,8 +19,8 @@
   copyDesktopItems,
   makeWrapper,
   writeShellApplication,
-  unionfs-fuse,
-  fuse,
+  fuse-overlayfs,
+  util-linux,
   coreutils,
   findutils,
 }:
@@ -29,43 +30,79 @@ let
 
     runtimeInputs = [
       wine
-      unionfs-fuse
-      fuse
+      fuse-overlayfs
+      util-linux
       coreutils
       findutils
     ];
 
     text = ''
+      prefix="${prefix}"
       data="''${XDG_DATA_HOME:-$HOME/.local/share}/fusion360"
       upper="$data/upper"
+      work="$data/work"
       merged="''${XDG_RUNTIME_DIR:-/tmp}/fusion360-prefix"
-
-      mkdir -p "$upper" "$merged"
-
-      # A prefix from an older build is not compatible with this one's layout,
-      # so the upper layer is keyed to the prefix it was created against.
       stamp="$data/prefix-path"
-      if [ -f "$stamp" ] && [ "$(cat "$stamp")" != "${prefix}" ]; then
-        echo "fusion360: prefix changed since this profile was created." >&2
-        echo "fusion360: previous $(cat "$stamp")" >&2
-        echo "fusion360: current  ${prefix}" >&2
-        echo "fusion360: move or delete $upper to start from the new prefix." >&2
-      fi
-      printf '%s' "${prefix}" > "$stamp"
 
-      cleanup() {
-        # Wine must be gone before the union can be unmounted, or the mount
-        # stays busy and the next launch inherits a stale merged directory.
-        WINEPREFIX="$merged" wineserver -k || true
-        fusermount -u "$merged" 2>/dev/null || true
-      }
+      mkdir -p "$upper" "$work" "$merged"
+
+      # Everything in /nix/store is mode 555 and owned by root, and no overlay
+      # option can conjure a write bit that isn't there: creating a file inside
+      # a directory whose only copy is the read-only lower layer fails with
+      # EACCES, and wine writes to its prefix constantly.
+      #
+      # So the writable layer gets its own copy of the directory tree — the
+      # directories only, never the file data. Writes then land in a mode-755
+      # upper directory while every file is still read straight from the store.
+      # For this prefix that is ~10k directories, about 40MB and a few seconds,
+      # against ~10GB and minutes for copying the prefix itself.
+      #
+      # Re-run whenever the prefix changes, and only ever additive, so a
+      # package update never destroys the user data already in the upper layer.
+      if [ ! -f "$stamp" ] || [ "$(cat "$stamp")" != "$prefix" ]; then
+        echo "fusion360: preparing writable layer for $prefix" >&2
+        (cd "$prefix" && find . -type d -exec mkdir -p "$upper/{}" \;)
+        chmod -R u+rwX "$upper"
+        printf '%s' "$prefix" > "$stamp"
+      fi
 
       if mountpoint -q "$merged" 2>/dev/null; then
         echo "fusion360: $merged is already mounted; is Fusion already running?" >&2
         exit 1
       fi
 
-      unionfs -o cow,hide_meta_files "$upper=RW:${prefix}=RO" "$merged"
+      # fusermount is setuid and must come from the system wrapper directory,
+      # NOT from a nixpkgs fuse package: pulling `fuse` into runtimeInputs
+      # shadows /run/wrappers/bin/fusermount with an unprivileged copy from the
+      # store, and every unmount then fails silently while the mount survives
+      # to block the next launch. fuse-overlayfs speaks fuse3, so prefer
+      # fusermount3 and keep fusermount as the fallback.
+      unmount_merged() {
+        fusermount3 -u "$merged" 2>/dev/null || fusermount -u "$merged" 2>/dev/null
+      }
+
+      cleanup() {
+        # wine has to be gone before the overlay can be unmounted, or the
+        # mount stays busy and the next launch aborts on the check above.
+        #
+        # `wineserver -k` starts a server if none is running, just to kill it,
+        # and that server holds the mount for a moment after the command
+        # returns — so unmounting immediately fails with EBUSY. Retry for a few
+        # seconds, then fall back to a lazy unmount so a wedged server can
+        # never strand the mount.
+        WINEPREFIX="$merged" wineserver -k 2>/dev/null || true
+        for _ in $(seq 20); do
+          if unmount_merged; then
+            return
+          fi
+          sleep 0.5
+        done
+        # Lazy detach, so a wedged wine process can never strand the mount and
+        # block the next launch.
+        fusermount3 -uz "$merged" 2>/dev/null || fusermount -uz "$merged" 2>/dev/null || true
+      }
+
+      fuse-overlayfs -o "lowerdir=$prefix,upperdir=$upper,workdir=$work" "$merged"
       trap cleanup EXIT INT TERM
 
       export WINEPREFIX="$merged"
