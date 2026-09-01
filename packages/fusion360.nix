@@ -189,9 +189,15 @@ let
       # Autodesk's browser sign-in hands back an adskidmgr: URL; when invoked
       # as the scheme handler, route it to the identity manager rather than
       # starting a second Fusion.
+      # Only the main launch owns the prefix's lifetime. The scheme handler
+      # runs *while* Fusion is up, so it must not tear the prefix down on the
+      # way out.
+      owns_prefix=1
+
       case "''${1:-}" in
         adskidmgr:*)
           target="$(find "$prefix" -name AdskIdentityManager.exe | head -n 1)"
+          owns_prefix=0
           ;;
         *)
           # Newest build wins: Fusion leaves older ones in place when it
@@ -205,6 +211,27 @@ let
         echo "fusion360: no executable found in $prefix" >&2
         exit 1
       fi
+
+      # Wine does not exit when the application does. services.exe,
+      # winedevice.exe, plugplay, rpcss, svchost, explorer and Autodesk's own
+      # cer_service.exe all stay resident, each holding a system D-Bus
+      # connection, and a new set accumulates on every launch.
+      #
+      # That is not merely untidy. dbus-broker accounts its byte quota per UID
+      # and splits it across that UID's peers, so enough abandoned peers starve
+      # the share of everything else: after a day of launches here, Steam was
+      # dropped on connect with "does not have the resources to receive a reply
+      # it requested" and plasma-powerdevil had failed to start 237 times.
+      #
+      # So tear the prefix down when Fusion exits. `wineserver -k` takes the
+      # whole tree with it; the wait first gives anything mid-write a chance to
+      # finish, since this is where Fusion flushes its layout and preferences.
+      cleanup_prefix() {
+        [ "$owns_prefix" = 1 ] || return 0
+        timeout 15 wineserver -w 2>/dev/null || true
+        wineserver -k 2>/dev/null || true
+      }
+      trap cleanup_prefix EXIT INT TERM
 
       wine "$target" "$@"
     '';
